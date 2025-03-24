@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Professional SNITCH VPN Detection Visualization</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        #description {
+            position: absolute;
+            bottom: 20px;
+            width: 100%;
+            text-align: center;
+            font-family: Arial, sans-serif;
+            color: #ffffff;
+            text-shadow: 0 1px 4px rgba(0,0,0,0.5);
+            font-size: 18px;
+            pointer-events: none;
+        }
+        #latencyPanel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            border-radius: 8px;
+            font-family: monospace;
+            color: #ffffff;
+            min-width: 300px;
+        }
+        .measurement {
+            margin: 5px 0;
+            padding: 5px;
+            border-radius: 4px;
+        }
+        .normal { background: rgba(0, 255, 0, 0.2); }
+        .suspicious { background: rgba(255, 0, 0, 0.2); }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div id="description">Initializing visualization...</div>
+    <div id="latencyPanel" class="hidden">
+        <div id="measurements"></div>
+        <div id="analysis" style="margin-top: 10px; border-top: 1px solid rgba(255,255,255,0.2); padding-top: 10px;"></div>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        let scene, camera, renderer, globe, controls;
+        let markers = [];
+        let lines = [];
+        let currentStep = 0;
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x000000);
+
+            camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 2, 4);  // Position camera to view Atlantic
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // Add controls
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.minDistance = 2;
+            controls.maxDistance = 10;
+
+            // Adding Globe
+            const geometry = new THREE.SphereGeometry(1, 64, 64);
+            const material = new THREE.MeshPhongMaterial({
+                map: new THREE.TextureLoader().load('https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/planets/earth_atmos_2048.jpg'),
+                bumpMap: new THREE.TextureLoader().load('https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/planets/earth_normal_2048.jpg'),
+                bumpScale: 0.02,
+            });
+            globe = new THREE.Mesh(geometry, material);
+            scene.add(globe);
+
+            // Initial rotation to show Atlantic
+            globe.rotation.y = 0;  // Reset rotation to show Greenwich meridian
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+
+            const pointLight = new THREE.PointLight(0xffffff, 1);
+            pointLight.position.set(5, 3, 5);
+            scene.add(pointLight);
+
+            animate();
+            sequenceAnimations();
+        }
+
+        function clearVisuals() {
+            markers.forEach(marker => scene.remove(marker));
+            lines.forEach(line => scene.remove(line));
+            markers = [];
+            lines = [];
+        }
+
+        function showStep(step) {
+            clearVisuals();
+            const panel = document.getElementById('latencyPanel');
+            const measurementsDiv = document.getElementById('measurements');
+            const analysisDiv = document.getElementById('analysis');
+            
+            // User in NY (red marker)
+            const userLocation = createMarker(40.7128, -74.0060, 0xff0000);  // NY coordinates
+            scene.add(userLocation);
+            markers.push(userLocation);
+
+            // Target webserver in London (blue marker)
+            const webserver = createMarker(51.5074, -0.1278, 0x0000ff);  // London coordinates
+            scene.add(webserver);
+            markers.push(webserver);
+
+            // Reset panel
+            panel.classList.add('hidden');
+            measurementsDiv.innerHTML = '';
+            analysisDiv.innerHTML = '';
+
+            if (step >= 1) {
+                // Add SNITCH measurement servers around Europe
+                const servers = [
+                    { lat: 48.8566, lon: 2.3522, name: 'Paris Server', expectedLatency: 2, actualLatency: 8 },
+                    { lat: 52.5200, lon: 13.4050, name: 'Berlin Server', expectedLatency: 15, actualLatency: 19 },
+                    { lat: 45.4642, lon: 9.1900, name: 'Milan Server', expectedLatency: 12, actualLatency: 16 },
+                    { lat: 52.3676, lon: 4.9041, name: 'Amsterdam Server', expectedLatency: 8, actualLatency: 12 }
+                ];
+
+                if (step >= 2) {
+                    panel.classList.remove('hidden');
+                    measurementsDiv.innerHTML = `
+                        <div style="margin-bottom: 8px;">
+                            <b>Target Website Access Time:</b><br>
+                            <div class="measurement suspicious">
+                                User (claims London IP) → Website: 71ms<br>
+                                Expected local access: ~2ms
+                            </div>
+                        </div>
+                        <div style="margin-bottom: 8px;"><b>Reference Measurements to Website:</b></div>
+                    `;
+                }
+
+                servers.forEach(({lat, lon, name, expectedLatency, actualLatency}) => {
+                    const server = createMarker(lat, lon, 0x00ff00);
+                    scene.add(server);
+                    markers.push(server);
+
+                    if (step >= 2) {
+                        // Line from measurement server to webserver
+                        const line = createLine(
+                            server.position,
+                            webserver.position,
+                            0x00ff00
+                        );
+                        scene.add(line);
+                        lines.push(line);
+
+                        // Add latency measurement
+                        measurementsDiv.innerHTML += `
+                            <div class="measurement normal">
+                                ${name} → Website: ${actualLatency}ms
+                            </div>
+                        `;
+
+                        if (step >= 3) {
+                            analysisDiv.innerHTML = `
+                                <b>Latency Analysis:</b><br>
+                                • European servers: 8-19ms to website<br>
+                                • User shows 71ms (much higher than EU)<br>
+                                • Latency matches NY→London route
+                            `;
+                        }
+                    }
+                });
+
+                // VPN server and true path (if step >= 4)
+                if (step >= 4) {
+                    const vpnServer = createMarker(51.5074, -0.1278, 0xff00ff);  // London VPN
+                    scene.add(vpnServer);
+                    markers.push(vpnServer);
+                    
+                    // Line from user to VPN
+                    const vpnLine = createLine(
+                        userLocation.position,
+                        vpnServer.position,
+                        0xff00ff
+                    );
+                    scene.add(vpnLine);
+                    lines.push(vpnLine);
+
+                    // Line from VPN to webserver
+                    const webserverLine = createLine(
+                        vpnServer.position,
+                        webserver.position,
+                        0xff00ff
+                    );
+                    scene.add(webserverLine);
+                    lines.push(webserverLine);
+
+                    analysisDiv.innerHTML += `<br><br>
+                        <b>VPN Detection Confirmed:</b><br>
+                        • NY→London VPN: ~70ms<br>
+                        • VPN→Website: ~1ms<br>
+                        • All EU servers: 8-19ms<br>
+                        • User latency (71ms) indicates US origin
+                    `;
+                }
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        function sequenceAnimations() {
+            const description = document.getElementById('description');
+
+            const steps = [
+                { text: 'Checking user\'s location via IP address...', duration: 4 },
+                { text: 'Selecting geographically close reference servers...', duration: 4 },
+                { text: 'Measuring network delays...', duration: 5 },
+                { text: 'Estimating direct connection speeds...', duration: 4 },
+                { text: 'Detecting unusual latency indicating potential VPN...', duration: 5 },
+                { text: 'VPN usage confirmed through latency analysis.', duration: 5 }
+            ];
+
+            let tl = gsap.timeline({ repeat: -1 });
+
+            steps.forEach((step, index) => {
+                tl.to({}, { 
+                    duration: step.duration,
+                    onStart: () => {
+                        description.textContent = step.text;
+                        showStep(index);
+                    }
+                });
+            });
+        }
+
+        // Convert lat/long to 3D coordinates
+        function latLongToVector3(lat, lon, radius) {
+            // Convert latitude and longitude to radians
+            const phi = (90 - lat) * (Math.PI / 180);
+            const theta = (lon + 180) * (Math.PI / 180);
+            
+            // Convert spherical coordinates to cartesian
+            const x = -(radius * Math.sin(phi) * Math.cos(theta));
+            const y = (radius * Math.cos(phi));
+            const z = (radius * Math.sin(phi) * Math.sin(theta));
+            
+            return new THREE.Vector3(x, y, z);
+        }
+
+        // Create a marker at given lat/long
+        function createMarker(lat, lon, color = 0xff0000) {
+            const markerGeometry = new THREE.SphereGeometry(0.02, 16, 16);
+            const markerMaterial = new THREE.MeshBasicMaterial({ color: color });
+            const marker = new THREE.Mesh(markerGeometry, markerMaterial);
+            const position = latLongToVector3(lat, lon, 1.01);
+            marker.position.copy(position);
+            return marker;
+        }
+
+        // Create a curved line between two points
+        function createLine(start, end, color = 0x00ff00) {
+            const points = [];
+            const segments = 100;
+            const midPoint = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
+            midPoint.normalize().multiplyScalar(1.5); // Pull the curve outward
+
+            for (let i = 0; i <= segments; i++) {
+                const t = i / segments;
+                const point = new THREE.Vector3();
+                // Quadratic bezier curve
+                point.x = Math.pow(1 - t, 2) * start.x + 2 * (1 - t) * t * midPoint.x + t * t * end.x;
+                point.y = Math.pow(1 - t, 2) * start.y + 2 * (1 - t) * t * midPoint.y + t * t * end.y;
+                point.z = Math.pow(1 - t, 2) * start.z + 2 * (1 - t) * t * midPoint.z + t * t * end.z;
+                points.push(point);
+            }
+
+            const material = new THREE.LineBasicMaterial({ color: color });
+            const geometry = new THREE.BufferGeometry().setFromPoints(points);
+            return new THREE.Line(geometry, material);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        init();
+    </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.4/gsap.min.js"></script>
+</body>
+</html>
+
